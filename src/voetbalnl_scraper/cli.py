@@ -195,17 +195,22 @@ def fetch_team_page(session: requests.Session, team_id: str, tab: str) -> list[M
         home = el.select_one(".value.home .team")
         away = el.select_one(".value.away .team")
         center = el.select_one(".value.center")
-        link = el.find("a", href=re.compile(r"/wedstrijd/M\d+"))
         if not (home and away and center and current_date):
             continue
 
+        href = el.get("href") if el.name == "a" else None
+        if not href:
+            link = el.find("a", href=re.compile(r"/wedstrijd/M\d+"))
+            if link:
+                href = link.get("href")
+
         match_id = None
         detail_url = None
-        if link and link.get("href"):
-            mm = re.search(r"/wedstrijd/(M\d+)", link["href"])
+        if href:
+            mm = re.search(r"/wedstrijd/(M\d+)", href)
             if mm:
                 match_id = mm.group(1)
-            detail_url = urljoin(BASE, link["href"])
+            detail_url = urljoin(BASE, href)
 
         m = Match(
             kind=kind,
@@ -232,34 +237,53 @@ def fetch_team_page(session: requests.Session, team_id: str, tab: str) -> list[M
     return out
 
 
+LABEL_TO_ATTR = {
+    "Wedstrijdnr.": "wedstrijdnummer",
+    "Veld": "field",
+    "Kleedkamer": "kleedkamer",
+}
+
+
 def enrich_match(session: requests.Session, match: Match) -> None:
     if not match.match_id:
         return
-    url = f"{BASE}/wedstrijd/{match.match_id}/uitslag"
+    suffix = "programma" if match.kind == "programma" else "uitslag"
+    url = match.detail_url or f"{BASE}/wedstrijd/{match.match_id}/{suffix}"
     try:
-        text = BeautifulSoup(session.get(url, timeout=15).text,
-                             "html.parser").get_text("\n", strip=True)
+        soup = BeautifulSoup(session.get(url, timeout=15).text, "html.parser")
     except requests.RequestException:
         return
 
     if not match.start:
-        mt = re.search(r"\b(\d{1,2}):(\d{2})\b", text)
+        time_el = soup.select_one(".MatchDetail-separatorLineText")
+        mt = re.match(r"(\d{1,2}):(\d{2})", time_el.get_text(strip=True)) if time_el else None
         if mt:
             base = datetime.strptime(match.date, "%Y-%m-%d")
             match.start = base.replace(
                 hour=int(mt.group(1)), minute=int(mt.group(2))
             ).strftime("%Y-%m-%dT%H:%M:%S")
 
-    loc_node = re.search(r"(Sportpark[^\n]*|Sportcomplex[^\n]*)", text, re.IGNORECASE)
-    if loc_node:
-        match.location = loc_node.group(1).strip()
+    park = soup.select_one(".LocationDetails-infoPark")
+    zipline = soup.select_one(".LocationDetails-infoZip")
+    if park:
+        sport = park.get_text(strip=True)
+        city_m = re.match(r"\d{4}\s?[A-Z]{2}\s+(.+)",
+                          zipline.get_text(strip=True)) if zipline else None
+        match.location = f"{sport}, {city_m.group(1).strip()}" if city_m else sport
 
-    for label, attr in (("Wedstrijdnr.", "wedstrijdnummer"),
-                        ("Veld", "field"),
-                        ("Kleedkamer", "kleedkamer")):
-        mm = re.search(rf"{re.escape(label)}\s*\n([^\n]+)", text)
-        if mm:
-            setattr(match, attr, mm.group(1).strip())
+    for labels_col in soup.select(".MatchDetail-labels"):
+        values_col = labels_col.find_next_sibling(class_="MatchDetail-values")
+        if not values_col:
+            continue
+        labels = labels_col.find_all("span", recursive=False)
+        values = values_col.find_all(["span", "div"], recursive=False)
+        for label_el, value_el in zip(labels, values):
+            attr = LABEL_TO_ATTR.get(label_el.get_text(strip=True))
+            if not attr:
+                continue
+            text = value_el.get_text(" ", strip=True)
+            if text:
+                setattr(match, attr, text)
 
 
 def to_json(matches: list[Match]) -> str:
