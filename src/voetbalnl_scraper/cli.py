@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import getpass
+import http.cookiejar
 import json
+import os
 import re
 import sys
 import time
 import uuid
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
+from pathlib import Path
 from urllib.parse import urljoin
 
 import requests
@@ -27,6 +31,11 @@ NL_MONTHS = {
     "juli": 7, "augustus": 8, "september": 9, "oktober": 10,
     "november": 11, "december": 12,
 }
+
+DEFAULT_COOKIE_PATH = (
+    Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    / "voetbalnl-scraper" / "cookies.txt"
+)
 
 
 @dataclass
@@ -47,15 +56,89 @@ class Match:
     detail_url: str | None = None
 
 
-def make_session() -> requests.Session:
+def make_session(cookie_path: Path | None) -> requests.Session:
     s = requests.Session()
     s.headers.update({
         "User-Agent": UA,
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "nl-NL,nl;q=0.9,en;q=0.8",
     })
-    s.get(BASE, timeout=15)
+    if cookie_path is not None:
+        jar = http.cookiejar.LWPCookieJar(str(cookie_path))
+        if cookie_path.exists():
+            try:
+                jar.load(ignore_discard=True, ignore_expires=True)
+            except http.cookiejar.LoadError:
+                pass
+        s.cookies = jar  # type: ignore[assignment]
     return s
+
+
+def save_cookies(session: requests.Session, cookie_path: Path) -> None:
+    cookie_path.parent.mkdir(parents=True, exist_ok=True)
+    jar = session.cookies
+    if isinstance(jar, http.cookiejar.LWPCookieJar):
+        jar.save(ignore_discard=True, ignore_expires=True)
+    else:
+        out = http.cookiejar.LWPCookieJar(str(cookie_path))
+        for c in jar:
+            out.set_cookie(c)
+        out.save(ignore_discard=True, ignore_expires=True)
+
+
+def is_login_redirect(resp: requests.Response) -> bool:
+    return "/inloggen" in resp.url or any(
+        "/inloggen" in h.headers.get("Location", "") for h in resp.history
+    )
+
+
+def login(session: requests.Session, email: str, password: str) -> None:
+    r = session.get(f"{BASE}/inloggen", timeout=15)
+    r.raise_for_status()
+    m = re.search(r'name="form_build_id"\s+value="([^"]+)"', r.text)
+    if not m:
+        raise SystemExit("Kon form_build_id niet vinden op /inloggen.")
+    payload = {
+        "email": email,
+        "password": password,
+        "form_build_id": m.group(1),
+        "form_id": "login_form",
+        "op": "Inloggen",
+    }
+    r = session.post(f"{BASE}/inloggen", data=payload, timeout=20)
+    if is_login_redirect(r) or 'name="password"' in r.text:
+        err = re.search(
+            r'class="[^"]*messages?--error[^"]*"[^>]*>(.*?)</',
+            r.text, re.S,
+        )
+        msg = (re.sub(r"<[^>]+>", " ", err.group(1)).strip()
+               if err else "controleer email/wachtwoord")
+        raise SystemExit(f"Inloggen mislukt: {msg}")
+
+
+def ensure_authenticated(
+    session: requests.Session,
+    email: str | None,
+    password: str | None,
+    cookie_path: Path | None,
+) -> None:
+    probe = session.get(f"{BASE}/account", timeout=15, allow_redirects=True)
+    if not is_login_redirect(probe):
+        return
+    if not email:
+        email = os.environ.get("VOETBALNL_EMAIL") or input("Voetbal.nl email: ").strip()
+    if not password:
+        password = os.environ.get("VOETBALNL_PASSWORD") or getpass.getpass(
+            "Voetbal.nl wachtwoord: "
+        )
+    if not email or not password:
+        raise SystemExit(
+            "Inloggen vereist: geef --email/--password of zet "
+            "VOETBALNL_EMAIL en VOETBALNL_PASSWORD."
+        )
+    login(session, email, password)
+    if cookie_path is not None:
+        save_cookies(session, cookie_path)
 
 
 def parse_dutch_date(text: str) -> datetime | None:
@@ -82,7 +165,13 @@ def parse_center_value(text: str):
 def fetch_team_page(session: requests.Session, team_id: str, tab: str) -> list[Match]:
     assert tab in ("programma", "uitslagen")
     url = f"{BASE}/team/{team_id}/{tab}"
-    soup = BeautifulSoup(session.get(url, timeout=15).text, "html.parser")
+    resp = session.get(url, timeout=15)
+    if is_login_redirect(resp):
+        raise SystemExit(
+            "Sessie verlopen tijdens scrapen — verwijder "
+            f"{DEFAULT_COOKIE_PATH} en probeer opnieuw."
+        )
+    soup = BeautifulSoup(resp.text, "html.parser")
 
     out: list[Match] = []
     content = soup.select_one(".ScheduleResults-content")
@@ -235,9 +324,30 @@ def main(argv: list[str] | None = None) -> int:
                    help="Sla detail-requests over")
     p.add_argument("--delay", type=float, default=0.8,
                    help="Wachttijd (s) tussen detail-requests")
+    p.add_argument("--email",
+                   help="Voetbal.nl login email (of env VOETBALNL_EMAIL)")
+    p.add_argument("--password",
+                   help="Voetbal.nl wachtwoord (of env VOETBALNL_PASSWORD; "
+                        "anders interactief)")
+    p.add_argument("--cookies", type=Path, default=DEFAULT_COOKIE_PATH,
+                   help=f"Pad voor cookie-jar (default: {DEFAULT_COOKIE_PATH})")
+    p.add_argument("--no-cookies", action="store_true",
+                   help="Bewaar geen cookies tussen runs")
+    p.add_argument("--logout", action="store_true",
+                   help="Verwijder cookie-jar en stop")
     args = p.parse_args(argv)
 
-    session = make_session()
+    cookie_path = None if args.no_cookies else args.cookies
+
+    if args.logout:
+        if cookie_path and cookie_path.exists():
+            cookie_path.unlink()
+            print(f"Cookies verwijderd: {cookie_path}", file=sys.stderr)
+        return 0
+
+    session = make_session(cookie_path)
+    ensure_authenticated(session, args.email, args.password, cookie_path)
+
     matches: list[Match] = []
     if args.include in ("programma", "alles"):
         matches += fetch_team_page(session, args.team_id, "programma")
@@ -248,6 +358,9 @@ def main(argv: list[str] | None = None) -> int:
         for m in matches:
             enrich_match(session, m)
             time.sleep(args.delay)
+
+    if cookie_path is not None:
+        save_cookies(session, cookie_path)
 
     matches.sort(key=lambda m: (m.start or m.date))
 

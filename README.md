@@ -18,6 +18,32 @@ pipx install git+https://github.com/<jouw-user>/voetbalnl-scraper.git
 
 Na installatie staat het commando `voetbalnl-scraper` op je PATH.
 
+## Inloggen
+
+Voetbal.nl vereist sinds 2026 een login om team-pagina's te bekijken. Je geeft
+je inloggegevens op één van deze manieren:
+
+```bash
+# 1. via environment variables (aanbevolen — geen credentials in shell-history)
+export VOETBALNL_EMAIL="je@email.nl"
+export VOETBALNL_PASSWORD="..."
+voetbalnl-scraper T1413246730
+
+# 2. via flags
+voetbalnl-scraper T1413246730 --email je@email.nl --password '...'
+
+# 3. interactief — laat password leeg en je krijgt een getpass-prompt
+voetbalnl-scraper T1413246730 --email je@email.nl
+```
+
+De sessie-cookie wordt opgeslagen in
+`~/.cache/voetbalnl-scraper/cookies.txt`, zodat volgende runs niet opnieuw
+hoeven in te loggen. Cookies wissen:
+
+```bash
+voetbalnl-scraper --logout T1413246730   # team_id wordt niet gebruikt
+```
+
 ## Gebruik
 
 ```bash
@@ -33,13 +59,18 @@ voetbalnl-scraper T1413246730 --no-enrich --out team.ics
 
 Vlaggen:
 
-| Flag           | Default  | Betekenis                                              |
-|----------------|----------|--------------------------------------------------------|
-| `--include`    | `alles`  | `programma`, `uitslagen` of `alles`                    |
-| `--format`     | `ics`    | `ics` of `json`                                        |
-| `--out`        | stdout   | Outputbestand                                          |
-| `--no-enrich`  | uit      | Sla de extra detailpagina-requests over                |
-| `--delay`      | `0.8`    | Wachttijd in seconden tussen detail-requests           |
+| Flag           | Default                                | Betekenis                                              |
+|----------------|----------------------------------------|--------------------------------------------------------|
+| `--include`    | `alles`                                | `programma`, `uitslagen` of `alles`                    |
+| `--format`     | `ics`                                  | `ics` of `json`                                        |
+| `--out`        | stdout                                 | Outputbestand                                          |
+| `--no-enrich`  | uit                                    | Sla de extra detailpagina-requests over                |
+| `--delay`      | `0.8`                                  | Wachttijd in seconden tussen detail-requests           |
+| `--email`      | env `VOETBALNL_EMAIL`                  | Login email                                            |
+| `--password`   | env `VOETBALNL_PASSWORD` of prompt     | Login wachtwoord                                       |
+| `--cookies`    | `~/.cache/voetbalnl-scraper/cookies.txt` | Cookie-jar pad                                       |
+| `--no-cookies` | uit                                    | Bewaar geen cookies tussen runs                        |
+| `--logout`     | —                                      | Verwijder opgeslagen cookies en stop                   |
 
 Het team-ID staat in de URL van een Voetbal.nl-teampagina (bv. `T1413246730`).
 
