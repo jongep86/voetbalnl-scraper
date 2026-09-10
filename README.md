@@ -27,13 +27,13 @@ je inloggegevens op één van deze manieren:
 # 1. via environment variables (aanbevolen — geen credentials in shell-history)
 export VOETBALNL_EMAIL="je@email.nl"
 export VOETBALNL_PASSWORD="..."
-voetbalnl-scraper T1413246730
+voetbalnl-scraper T618064171
 
 # 2. via flags
-voetbalnl-scraper T1413246730 --email je@email.nl --password '...'
+voetbalnl-scraper T618064171 --email je@email.nl --password '...'
 
 # 3. interactief — laat password leeg en je krijgt een getpass-prompt
-voetbalnl-scraper T1413246730 --email je@email.nl
+voetbalnl-scraper T618064171 --email je@email.nl
 ```
 
 De sessie-cookie wordt opgeslagen in
@@ -41,20 +41,20 @@ De sessie-cookie wordt opgeslagen in
 hoeven in te loggen. Cookies wissen:
 
 ```bash
-voetbalnl-scraper --logout T1413246730   # team_id wordt niet gebruikt
+voetbalnl-scraper --logout T618064171   # team_id wordt niet gebruikt
 ```
 
 ## Gebruik
 
 ```bash
 # ICS-agenda van programma + uitslagen
-voetbalnl-scraper T1413246730 --out team.ics
+voetbalnl-scraper T618064171 --out team.ics
 
 # alleen uitslagen als JSON
-voetbalnl-scraper T1413246730 --include uitslagen --format json --out uitslagen.json
+voetbalnl-scraper T618064171 --include uitslagen --format json --out uitslagen.json
 
 # zonder de extra detail-requests per wedstrijd
-voetbalnl-scraper T1413246730 --no-enrich --out team.ics
+voetbalnl-scraper T618064171 --no-enrich --out team.ics
 ```
 
 Vlaggen:
@@ -72,7 +72,9 @@ Vlaggen:
 | `--no-cookies` | uit                                    | Bewaar geen cookies tussen runs                        |
 | `--logout`     | —                                      | Verwijder opgeslagen cookies en stop                   |
 
-Het team-ID staat in de URL van een Voetbal.nl-teampagina (bv. `T1413246730`).
+Het team-ID staat in de URL van een Voetbal.nl-teampagina. Het ID in de
+voorbeelden hierboven, `T618064171`, is Max zijn team: Concordia "zat O12-2"
+(JO12-2), seizoen 2026/27.
 
 ## Upgraden / verwijderen
 
