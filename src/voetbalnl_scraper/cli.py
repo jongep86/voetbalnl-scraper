@@ -264,12 +264,18 @@ def enrich_match(session: requests.Session, match: Match) -> None:
             ).strftime("%Y-%m-%dT%H:%M:%S")
 
     park = soup.select_one(".LocationDetails-infoPark")
+    street = soup.select_one(".LocationDetails-infoStreet")
     zipline = soup.select_one(".LocationDetails-infoZip")
     if park:
-        sport = park.get_text(strip=True)
-        city_m = re.match(r"\d{4}\s?[A-Z]{2}\s+(.+)",
-                          zipline.get_text(strip=True)) if zipline else None
-        match.location = f"{sport}, {city_m.group(1).strip()}" if city_m else sport
+        parts = [park.get_text(strip=True)]
+        if street:
+            parts.append(street.get_text(strip=True))
+        if zipline:
+            zip_text = zipline.get_text(strip=True)
+            zm = re.match(r"(\d{4})\s?([A-Z]{2})\s+(.+)", zip_text)
+            parts.append(f"{zm.group(1)} {zm.group(2)} {zm.group(3).strip()}"
+                         if zm else zip_text)
+        match.location = ", ".join(parts)
 
     for labels_col in soup.select(".MatchDetail-labels"):
         values_col = labels_col.find_next_sibling(class_="MatchDetail-values")
@@ -290,6 +296,12 @@ def to_json(matches: list[Match]) -> str:
     return json.dumps([asdict(m) for m in matches], ensure_ascii=False, indent=2)
 
 
+def ics_escape(text: str) -> str:
+    """Escape TEXT-waarden volgens RFC 5545 (backslash, ; , en newline)."""
+    return (text.replace("\\", "\\\\").replace(";", "\\;")
+            .replace(",", "\\,").replace("\n", "\\n"))
+
+
 def to_ics(matches: list[Match], calendar_name: str) -> str:
     def fmt_local(dt): return dt.strftime("%Y%m%dT%H%M%S")
     def fmt_date(dt):  return dt.strftime("%Y%m%d")
@@ -298,7 +310,7 @@ def to_ics(matches: list[Match], calendar_name: str) -> str:
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
         "PRODID:-//voetbalnl-scraper//NL",
-        f"X-WR-CALNAME:{calendar_name}",
+        f"X-WR-CALNAME:{ics_escape(calendar_name)}",
         "X-WR-TIMEZONE:Europe/Amsterdam",
     ]
     now_utc = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
@@ -327,9 +339,9 @@ def to_ics(matches: list[Match], calendar_name: str) -> str:
             day = datetime.strptime(m.date, "%Y-%m-%d")
             lines.append(f"DTSTART;VALUE=DATE:{fmt_date(day)}")
             lines.append(f"DTEND;VALUE=DATE:{fmt_date(day + timedelta(days=1))}")
-        lines.append(f"SUMMARY:{summary}")
-        lines.append(f"LOCATION:{m.location or ''}")
-        lines.append("DESCRIPTION:" + "\\n".join(desc))
+        lines.append(f"SUMMARY:{ics_escape(summary)}")
+        lines.append(f"LOCATION:{ics_escape(m.location or '')}")
+        lines.append("DESCRIPTION:" + "\\n".join(ics_escape(d) for d in desc))
         lines.append("END:VEVENT")
 
     lines.append("END:VCALENDAR")
