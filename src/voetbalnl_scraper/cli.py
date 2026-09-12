@@ -354,6 +354,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("team_id", help="Team-ID, bv. T1413246730")
     p.add_argument("--include", choices=("programma", "uitslagen", "alles"),
                    default="alles")
+    p.add_argument("--filter", dest="team_filter", metavar="TEKST",
+                   help="Alleen wedstrijden waar TEKST in home of away staat "
+                        "(case-insensitive), bv. 'Concordia O12-2'")
+    p.add_argument("--calname",
+                   help="Kalendernaam in de ICS (default: 'Team <team_id>')")
     p.add_argument("--format", choices=("ics", "json"), default="ics")
     p.add_argument("--out", help="Outputbestand (default: stdout)")
     p.add_argument("--no-enrich", action="store_true",
@@ -390,6 +395,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.include in ("uitslagen", "alles"):
         matches += fetch_team_page(session, args.team_id, "uitslagen")
 
+    if args.team_filter:
+        needle = args.team_filter.lower()
+        matches = [m for m in matches
+                   if needle in m.home.lower() or needle in m.away.lower()]
+
     if not args.no_enrich:
         for m in matches:
             enrich_match(session, m)
@@ -401,7 +411,8 @@ def main(argv: list[str] | None = None) -> int:
     matches.sort(key=lambda m: (m.start or m.date))
 
     output = to_json(matches) if args.format == "json" \
-        else to_ics(matches, calendar_name=f"Team {args.team_id}")
+        else to_ics(matches,
+                    calendar_name=args.calname or f"Team {args.team_id}")
 
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
